@@ -1,0 +1,18 @@
+# UI Framework
+PySide6
+
+# Database ORM
+SQLAlchemy
+
+# Data Engine
+polars
+
+# API & Web Requests
+requests
+python-dotenv
+
+# Testing
+pytest
+
+#Widgets
+matplotlib
