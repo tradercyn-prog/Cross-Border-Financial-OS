@@ -89,8 +89,8 @@ class BillsPlannerTab(QWidget):
 
         # Fixed Monthly Bills Table
         self.layout.addWidget(QLabel("Fixed Monthly Bills"))
-        self.fixed_model = QStandardItemModel(0, 5)
-        self.fixed_model.setHorizontalHeaderLabels(["ID", "Category", "Description", "Gross Amount", "Freq"])
+        self.fixed_model = QStandardItemModel(0, 6)
+        self.fixed_model.setHorizontalHeaderLabels(["ID", "Category", "Description", "Gross Amount", "Freq", "Action"])
         self.fixed_table = QTableView()
         self.fixed_table.setModel(self.fixed_model)
         self.fixed_table.setColumnHidden(0, True)
@@ -104,8 +104,8 @@ class BillsPlannerTab(QWidget):
 
         # Weekly Lifestyle Table
         self.layout.addWidget(QLabel("Weekly Lifestyle"))
-        self.lifestyle_model = QStandardItemModel(0, 5)
-        self.lifestyle_model.setHorizontalHeaderLabels(["ID", "Category", "Description", "Gross Amount", "Freq"])
+        self.lifestyle_model = QStandardItemModel(0, 6)
+        self.lifestyle_model.setHorizontalHeaderLabels(["ID", "Category", "Description", "Gross Amount", "Freq", "Action"])
         self.lifestyle_table = QTableView()
         self.lifestyle_table.setModel(self.lifestyle_model)
         self.lifestyle_table.setColumnHidden(0, True)
@@ -131,7 +131,16 @@ class BillsPlannerTab(QWidget):
             bills: List[Bill] = db.query(Bill).all()
             for bill in bills:
                 model = self.fixed_model if bill.is_fixed else self.lifestyle_model
+                table = self.fixed_table if bill.is_fixed else self.lifestyle_table
                 self.add_bill_to_model(model, bill)
+
+                commit_button = QPushButton("Commit Payment")
+                # Use a lambda that captures the current bill's ID
+                commit_button.clicked.connect(lambda checked, b_id=bill.id: self.commit_payment(b_id))
+
+                row_index = model.rowCount() - 1
+                action_column_index = 5  # Action is the 6th column (index 5)
+                table.setIndexWidget(model.index(row_index, action_column_index), commit_button)
 
     def add_bill_to_model(self, model: QStandardItemModel, bill: Bill) -> None:
         """Adds a single bill entry to the specified QStandardItemModel.
@@ -196,6 +205,27 @@ class BillsPlannerTab(QWidget):
 
             session.commit()
             global_state.data_updated.emit()
+
+    @Slot(int)
+    def commit_payment(self, bill_id: int) -> None:
+        """Commits a payment for a specific bill, updating the spent amount."""
+        with SessionLocal() as session:
+            bill: Optional[Bill] = session.query(Bill).get(bill_id)
+            if not bill:
+                QMessageBox.warning(self, "Error", f"Bill with ID {bill_id} not found.")
+                return
+
+            if bill.spent_this_month is None:
+                bill.spent_this_month = 0.0
+
+            # Gross Amount is bill.amount
+            bill.spent_this_month += bill.amount
+
+            session.commit()
+            global_state.data_updated.emit()
+            QMessageBox.information(
+                self, "Payment Committed", f"Payment for '{bill.description}' has been successfully recorded."
+            )
 
     def add_bill(self) -> None:
         """Adds a new bill entry to the database based on form input.

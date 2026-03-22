@@ -250,13 +250,15 @@ class FinancialEngine:
         remaining_weekly_target = max(0.0, gross_weekly_target - earned_this_week_base)
 
         # 5. Daily Grind Math
-        remaining_days_in_month = (end_of_month - current_date).days
-        remaining_to_earn_total = max(0.0, gross_monthly_burn_base - total_earned_base)
+        # Per user request, Dynamic Daily Target = (Remaining Monthly Burn) / (Days remaining in month)
+        remaining_days_in_month = (end_of_month - current_date).days + 1
 
         if remaining_days_in_month > 0:
-            daily_goal = (remaining_to_earn_total + safety_net_deficit) / remaining_days_in_month
+            daily_goal = remaining_monthly_burn_base / remaining_days_in_month
         else:
-            daily_goal = remaining_to_earn_total + safety_net_deficit
+            daily_goal = remaining_monthly_burn_base
+
+        remaining_to_earn_total = max(0.0, gross_monthly_burn_base - total_earned_base)
 
         return {
             "safe_to_spend": float(safe_to_spend),
@@ -320,8 +322,50 @@ class FinancialEngine:
             current_date=current_date,
         )
 
+        income_telemetry = self.calculate_income_telemetry(income_data, exchange_rate)
+        dynamic_goals.update(income_telemetry)
+
         # We are now just a passthrough for the most part
         return dynamic_goals
+
+    def calculate_income_telemetry(self, income_data: List[Dict], exchange_rate: float) -> Dict[str, float]:
+        """Calculates 7-day income telemetry.
+
+        Args:
+            income_data: A list of dictionaries representing income entries.
+            exchange_rate: The exchange rate for currency conversion.
+
+        Returns:
+            A dictionary with 7-day average daily income and hourly rates.
+        """
+        if not income_data:
+            return {
+                "avg_daily_income_7_day": 0.0,
+                "avg_hourly_rate_24h_7_day": 0.0,
+                "avg_hourly_rate_8h_7_day": 0.0,
+            }
+
+        df = pl.DataFrame(income_data)
+        df = self._normalize_to_base(df, "input_amount", exchange_rate)
+
+        if df.schema["date"] == pl.String:
+            df = df.with_columns(pl.col("date").str.to_date("%Y-%m-%d"))
+
+        seven_days_ago = datetime.date.today() - datetime.timedelta(days=7)
+
+        df_last_7_days = df.filter(pl.col("date") >= seven_days_ago)
+
+        total_income_7_days = df_last_7_days[f"input_amount_{self.base_currency.lower()}"].sum() or 0.0
+
+        avg_daily_income = total_income_7_days / 7
+        avg_hourly_24h = avg_daily_income / 24
+        avg_hourly_8h = avg_daily_income / 8
+
+        return {
+            "avg_daily_income_7_day": float(avg_daily_income),
+            "avg_hourly_rate_24h_7_day": float(avg_hourly_24h),
+            "avg_hourly_rate_8h_7_day": float(avg_hourly_8h),
+        }
 
     def get_income_sources(self, income_data: List[Dict], exchange_rate: float) -> Dict[str, float]:
         """Aggregates income data by source and returns total earned per source in base currency.

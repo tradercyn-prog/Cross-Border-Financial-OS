@@ -1,4 +1,5 @@
 from datetime import datetime
+import json
 from typing import Any, Dict, List, Optional
 
 from PySide6.QtCore import Qt, Slot
@@ -43,11 +44,37 @@ class DashboardTab(QWidget):
         refreshing of displayed metrics.
         """
         super().__init__()
+        self.config_file = "ui_config.json"
         self.init_ui()
+        self._load_config()
         self.refresh_dashboard()
 
         # Listen for any data changes and refresh instantly
         global_state.data_updated.connect(self.refresh_dashboard)
+
+    def _load_config(self) -> None:
+        """Loads UI configuration from ui_config.json."""
+        try:
+            with open(self.config_file, "r") as f:
+                config = json.load(f)
+            if config.get("pacing") == "Yes":
+                self.pacing_dropdown.setCurrentText("Yes")
+        except (FileNotFoundError, json.JSONDecodeError):
+            # If file doesn't exist or is empty/corrupt, create it with default
+            with open(self.config_file, "w") as f:
+                json.dump({"pacing": "No"}, f, indent=4)
+
+    def _save_config(self) -> None:
+        """Saves the current UI configuration to ui_config.json."""
+        config = {"pacing": self.pacing_dropdown.currentText()}
+        with open(self.config_file, "w") as f:
+            json.dump(config, f, indent=4)
+
+    @Slot()
+    def _on_pacing_changed(self) -> None:
+        """Handles changes in the pacing dropdown."""
+        self._save_config()
+        self.refresh_dashboard()
 
     @staticmethod
     def get_color_from_percentage(percentage: float, invert: bool = False) -> str:
@@ -86,11 +113,11 @@ class DashboardTab(QWidget):
         # --- Pacing Toggle ---
         controls_layout = QHBoxLayout()
         self.pacing_label = QLabel("Enable Strict Weekly Pacing:")
-        self.pacing_toggle = QComboBox()
-        self.pacing_toggle.addItems(["No", "Yes"])
-        self.pacing_toggle.currentTextChanged.connect(self.refresh_dashboard)
+        self.pacing_dropdown = QComboBox()
+        self.pacing_dropdown.addItems(["No", "Yes"])
+        self.pacing_dropdown.currentIndexChanged.connect(self._on_pacing_changed)
         controls_layout.addWidget(self.pacing_label)
-        controls_layout.addWidget(self.pacing_toggle)
+        controls_layout.addWidget(self.pacing_dropdown)
 
         self.safety_net_label = QLabel("Safety Net (Months):")
         self.safety_net_spinbox = QSpinBox()
@@ -145,6 +172,9 @@ class DashboardTab(QWidget):
         total_monthly_earned_layout.addWidget(self.total_monthly_earned_sparkline)
         total_monthly_earned_layout.setSpacing(0)
 
+        self.seven_day_avg_card = StatCard("7-Day Daily Average")
+        self.seven_day_hourly_rate_card = StatCard("7-Day Hourly Rate")
+
         # --- Charts ---
         self.income_donut = DonutChartWidget(title="Income Sources")
         self.flight_home_gauge = FlightHomeGaugeWidget()
@@ -173,6 +203,10 @@ class DashboardTab(QWidget):
         self.grid_layout.addLayout(weekly_target_layout, 2, 2, 1, 2)
         self.grid_layout.addLayout(total_monthly_earned_layout, 2, 4, 1, 2)
 
+        # Row 3 - New Income Telemetry
+        self.grid_layout.addWidget(self.seven_day_avg_card, 3, 0, 1, 2)
+        self.grid_layout.addWidget(self.seven_day_hourly_rate_card, 3, 2, 1, 2)
+
         self.grid_layout.setRowMinimumHeight(1, 250)  # Give charts space
 
         self.main_layout.addLayout(self.grid_layout)
@@ -196,7 +230,7 @@ class DashboardTab(QWidget):
         now = datetime.now()
         fx_rate: Optional[float] = exchange_rate_provider.get_live_rate(global_state.base_currency, global_state.local_currency)
         safety_net_months: int = self.safety_net_spinbox.value()
-        pacing_enabled: bool = self.pacing_toggle.currentText() == "Yes"
+        pacing_enabled: bool = self.pacing_dropdown.currentText() == "Yes"
 
         base_currency_symbol: str = global_state.currency_symbols.get(global_state.base_currency, global_state.base_currency)
 
@@ -234,6 +268,14 @@ class DashboardTab(QWidget):
         self.daily_target_card.update_value(f"{base_currency_symbol}{dashboard_metrics[f'daily_hustle_{global_state.base_currency.lower()}']:,.2f}")
         self.weekly_target_card.update_value(f"{base_currency_symbol}{dashboard_metrics[f'remaining_weekly_target_{global_state.base_currency.lower()}']:,.2f}")
         self.total_monthly_earned_card.update_value(f"{base_currency_symbol}{dashboard_metrics[f'total_earned_{global_state.base_currency.lower()}']:.2f}")
+
+        # Update new income telemetry cards
+        avg_daily = dashboard_metrics.get("avg_daily_income_7_day", 0.0)
+        avg_hourly_24 = dashboard_metrics.get("avg_hourly_rate_24h_7_day", 0.0)
+        avg_hourly_8 = dashboard_metrics.get("avg_hourly_rate_8h_7_day", 0.0)
+
+        self.seven_day_avg_card.update_value(f"{base_currency_symbol}{avg_daily:,.2f}/day")
+        self.seven_day_hourly_rate_card.update_value(f"{base_currency_symbol}{avg_hourly_24:,.2f}/hr (24h) | {base_currency_symbol}{avg_hourly_8:,.2f}/hr (8h)")
 
         income_sources: Dict[str, float] = engine.get_income_sources(incomes, fx_rate)
         self.income_donut.update_data(income_sources)
